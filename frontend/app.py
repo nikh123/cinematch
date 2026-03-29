@@ -167,7 +167,7 @@ with center:
         col_img, col_txt = st.columns([1, 3])
         with col_img:
             if movie.get("poster"):
-                st.image(movie["poster"], use_column_width=True)
+                st.image(movie["poster"], use_container_width=True)
         with col_txt:
             st.markdown(f"### {movie.get('title', '')}")
             st.markdown(f"**Genres:** {movie.get('genres', 'N/A')}")
@@ -299,7 +299,7 @@ def _render_movie_grid(movies: list[dict], cols_count: int = 4, selectable: bool
         with cols[i % cols_count]:
             poster = movie.get("poster", "")
             if poster:
-                st.image(poster, use_column_width=True)
+                st.image(poster, use_container_width=True)
             else:
                 st.markdown(
                     '<div style="background:#e0e0e0;height:220px;display:flex;'
