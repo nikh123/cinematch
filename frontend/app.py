@@ -389,7 +389,7 @@ st.divider()
 
 if st.session_state.recommendations:
     st.subheader("Recommended for You")
-    _render_movie_grid(st.session_state.recommendations, cols_count=4)
+    _render_movie_grid(st.session_state.recommendations, cols_count=4, selectable=True)
 elif st.session_state.last_viewed_movie:
     movie = st.session_state.last_viewed_movie
     st.subheader(f"\U0001F50D {movie.get('title', '')}")
