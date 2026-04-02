@@ -18,6 +18,7 @@ import re
 from google.cloud import bigquery
 from google.oauth2 import service_account
 import pandas as pd
+import pycountry
 
 # ── Configuration ─────────────────────────────────────
 PROJECT_ID = "cloudproject-488613"
@@ -40,6 +41,7 @@ MOVIES = f"`{PROJECT_ID}.{DATASET}.ml-small-movies`"
 RATINGS = f"`{PROJECT_ID}.{DATASET}.ml-small-ratings`"
 LINKS = f"`{PROJECT_ID}.{DATASET}.ml-small-links`"
 REC_MODEL = f"`{PROJECT_ID}.{DATASET}.rec_model`"
+MOVIES_DB = f"`{PROJECT_ID}.{DATASET}.movies_db`"
 
 
 # ── Helpers ───────────────────────────────────────────
@@ -100,11 +102,21 @@ def get_popular_movies(top_n: int = 20) -> pd.DataFrame:
 def search_by_title(title: str, limit: int = 5) -> pd.DataFrame:
     """Search movies by title substring (used by /movie-info)."""
     safe = title.replace("'", "\\'")
+    conditions = [f"LOWER(m.title) LIKE LOWER('%{safe}%')"]
+
+    # Reverse format_title: "The Matrix (1999)" -> also search "Matrix, The (1999)"
+    rev = re.match(r"^(The|A|An)\s+(.+?)(\s*\(\d{4}\))?\s*$", str(title), re.IGNORECASE)
+    if rev:
+        article, base = rev.group(1), rev.group(2).replace("'", "\\'")
+        year = (rev.group(3) or "").strip()
+        reversed_title = f"{base}, {article} {year}".strip()
+        conditions.append(f"LOWER(m.title) LIKE LOWER('%{reversed_title}%')")
+
     sql = f"""
         SELECT m.movieId, m.title, m.genres, l.tmdbId
         FROM {MOVIES} m
         LEFT JOIN {LINKS} l ON m.movieId = l.movieId
-        WHERE LOWER(m.title) LIKE LOWER('%{safe}%')
+        WHERE {' OR '.join(conditions)}
         ORDER BY m.title
         LIMIT {limit}
     """
@@ -127,31 +139,131 @@ def get_genres() -> list[str]:
     return df["genre"].tolist() if not df.empty else []
 
 
+# Extra mappings for codes pycountry doesn't resolve or names that are too verbose
+_LANG_CODE_OVERRIDE = {"cn": "Cantonese", "xx": "Other"}
+_LANG_NAME_CLEANUP = {
+    "Modern Greek (1453-)": "Greek",
+    "Malay (macrolanguage)": "Malay",
+    "Nepali (macrolanguage)": "Nepali",
+}
+
+
+def _lang_code_to_name(code: str) -> str:
+    """Convert ISO 639-1 code to full language name via pycountry."""
+    if code in _LANG_CODE_OVERRIDE:
+        return _LANG_CODE_OVERRIDE[code]
+    try:
+        lang = pycountry.languages.get(alpha_2=code)
+        if lang:
+            return _LANG_NAME_CLEANUP.get(lang.name, lang.name)
+        return code
+    except Exception:
+        return code
+
+
+def _lang_name_to_code(name: str) -> str:
+    """Convert full language name back to ISO 639-1 code."""
+    # Check overrides first
+    for code, n in _LANG_CODE_OVERRIDE.items():
+        if n == name:
+            return code
+    # Check cleanup reverse mapping
+    for original, cleaned in _LANG_NAME_CLEANUP.items():
+        if cleaned == name:
+            name = original
+            break
+    try:
+        lang = pycountry.languages.get(name=name)
+        return lang.alpha_2 if lang else name
+    except Exception:
+        return name
+
+
+def get_languages() -> list[str]:
+    """Distinct languages from the movies_db table, returned as full names."""
+    sql = f"""
+        SELECT DISTINCT language
+        FROM {MOVIES_DB}
+        WHERE language IS NOT NULL AND language != ''
+        ORDER BY language
+    """
+    df = run_query(sql)
+    if df.empty:
+        return []
+    names = [_lang_code_to_name(code) for code in df["language"].tolist()]
+    return sorted(set(names))
+
+
+def get_countries() -> list[str]:
+    """Distinct countries from the movies_db table."""
+    sql = f"""
+        SELECT DISTINCT country
+        FROM {MOVIES_DB}
+        WHERE country IS NOT NULL AND country != ''
+        ORDER BY country
+    """
+    df = run_query(sql)
+    return df["country"].tolist() if not df.empty else []
+
+
 def get_movies_with_filters(
     genre: str | None = None,
     min_rating: float = 0,
     year_min: int = 1900,
     year_max: int = 2025,
+    language: str | None = None,
+    country: str | None = None,
     top_n: int = 20,
 ) -> pd.DataFrame:
-    """Movies filtered by genre, year range and minimum average rating."""
-    genre_clause = f"AND m.genres LIKE '%{genre}%'" if genre and genre != "All" else ""
-    year_clause = f"""
-        AND SAFE_CAST(REGEXP_EXTRACT(m.title, r'\\((\\d{{4}})\\)$') AS INT64)
-            BETWEEN {year_min} AND {year_max}
-    """
-    sql = f"""
-        SELECT m.movieId, m.title, m.genres, l.tmdbId,
-               ROUND(AVG(r.rating_im), 2) AS avg_rating
-        FROM {MOVIES} m
-        JOIN {RATINGS} r ON m.movieId = r.movieId
-        LEFT JOIN {LINKS} l ON m.movieId = l.movieId
-        WHERE 1=1 {genre_clause} {year_clause}
-        GROUP BY m.movieId, m.title, m.genres, l.tmdbId
-        HAVING AVG(r.rating_im) >= {min_rating}
-        ORDER BY avg_rating DESC
-        LIMIT {top_n}
-    """
+    """Movies filtered by genre, year range, minimum average rating, language and country."""
+    use_movies_db = (language and language != "All") or (country and country != "All")
+
+    if use_movies_db:
+        # Use movies_db as base table (has language, country, tmdbId)
+        genre_clause = f"AND db.genres LIKE '%{genre}%'" if genre and genre != "All" else ""
+        year_clause = f"""
+            AND db.release_year BETWEEN {year_min} AND {year_max}
+        """
+        lang_clause = ""
+        if language and language != "All":
+            lang_code = _lang_name_to_code(language)
+            safe_lang = lang_code.replace("'", "\\'")
+            lang_clause = f"AND db.language = '{safe_lang}'"
+        country_clause = ""
+        if country and country != "All":
+            safe_country = country.replace("'", "\\'")
+            country_clause = f"AND db.country = '{safe_country}'"
+
+        sql = f"""
+            SELECT db.movieId, db.title, db.genres, db.tmdbId,
+                   ROUND(COALESCE(AVG(r.rating_im), 0), 2) AS avg_rating
+            FROM {MOVIES_DB} db
+            LEFT JOIN {RATINGS} r ON db.movieId = r.movieId
+            WHERE 1=1 {genre_clause} {year_clause} {lang_clause} {country_clause}
+            GROUP BY db.movieId, db.title, db.genres, db.tmdbId
+            HAVING COALESCE(AVG(r.rating_im), 0) >= {min_rating}
+            ORDER BY avg_rating DESC
+            LIMIT {top_n}
+        """
+    else:
+        # Use ml-small-movies as base table (default path)
+        genre_clause = f"AND m.genres LIKE '%{genre}%'" if genre and genre != "All" else ""
+        year_clause = f"""
+            AND SAFE_CAST(REGEXP_EXTRACT(m.title, r'\\((\\d{{4}})\\)$') AS INT64)
+                BETWEEN {year_min} AND {year_max}
+        """
+        sql = f"""
+            SELECT m.movieId, m.title, m.genres, l.tmdbId,
+                   ROUND(COALESCE(AVG(r.rating_im), 0), 2) AS avg_rating
+            FROM {MOVIES} m
+            LEFT JOIN {RATINGS} r ON m.movieId = r.movieId
+            LEFT JOIN {LINKS} l ON m.movieId = l.movieId
+            WHERE 1=1 {genre_clause} {year_clause}
+            GROUP BY m.movieId, m.title, m.genres, l.tmdbId
+            HAVING COALESCE(AVG(r.rating_im), 0) >= {min_rating}
+            ORDER BY avg_rating DESC
+            LIMIT {top_n}
+        """
     df = run_query(sql)
     if not df.empty:
         df["title"] = df["title"].apply(format_title)

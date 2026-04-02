@@ -6,6 +6,8 @@ GET  /                  → Health check
 GET  /health            → Health check
 GET  /autocomplete?q=   → Title autocomplete (Elasticsearch)
 GET  /genres            → Distinct genres from dataset
+GET  /languages         → Distinct languages (BigQuery)
+GET  /countries         → Distinct countries (BigQuery)
 GET  /movies/popular    → Popular movies (BigQuery)
 POST /movies/filter     → Filtered movies by genre/year/rating
 POST /recommend         → ML-based recommendations
@@ -19,7 +21,9 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 from bigquery_utils import (
+    get_countries,
     get_genres,
+    get_languages,
     get_movies_with_filters,
     get_popular_movies,
     search_by_title,
@@ -58,21 +62,22 @@ def genres():
         return jsonify({"genres": [], "error": str(e)}), 500
 
 
-# ── Languages (from TMDB config) ─────────────────────
-LANGUAGE_MAP = {
-    "en": "English", "fr": "French", "de": "German", "es": "Spanish",
-    "it": "Italian", "ja": "Japanese", "ko": "Korean", "zh": "Chinese",
-    "hi": "Hindi", "pt": "Portuguese", "ru": "Russian", "ar": "Arabic",
-    "nl": "Dutch", "sv": "Swedish", "da": "Danish", "no": "Norwegian",
-    "fi": "Finnish", "pl": "Polish", "tr": "Turkish", "th": "Thai",
-    "cs": "Czech", "el": "Greek", "he": "Hebrew", "hu": "Hungarian",
-    "ro": "Romanian", "ta": "Tamil", "te": "Telugu",
-}
-
-
+# ── Languages (from BigQuery movies_db) ──────────────
 @app.route("/languages")
 def languages():
-    return jsonify({"languages": LANGUAGE_MAP})
+    try:
+        return jsonify({"languages": get_languages()})
+    except Exception as e:
+        return jsonify({"languages": [], "error": str(e)}), 500
+
+
+# ── Countries (from BigQuery movies_db) ──────────────
+@app.route("/countries")
+def countries():
+    try:
+        return jsonify({"countries": get_countries()})
+    except Exception as e:
+        return jsonify({"countries": [], "error": str(e)}), 500
 
 
 # ── Popular movies ────────────────────────────────────
@@ -93,6 +98,8 @@ def movies_filter():
             min_rating=float(body.get("min_rating", 0)),
             year_min=int(body.get("year_min", 1900)),
             year_max=int(body.get("year_max", 2025)),
+            language=body.get("language"),
+            country=body.get("country"),
             top_n=int(body.get("n", 20)),
         )
         results = [_enrich_row(r) for r in df.to_dict(orient="records")]

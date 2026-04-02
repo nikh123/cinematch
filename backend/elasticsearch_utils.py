@@ -1,6 +1,6 @@
 """Elasticsearch utilities — indexing and autocomplete search.
 
-Uses the 'search_as_you_type' mapping for fast prefix/autocomplete queries.
+Uses 'match_phrase_prefix' for autocomplete queries (cf. Lab 6).
 Run this file directly to re-index: python elasticsearch_utils.py
 """
 
@@ -12,7 +12,7 @@ from elasticsearch.helpers import bulk
 
 ES_URL = os.environ["ES_URL"]
 ES_API_KEY = os.environ["ES_API_KEY"]
-INDEX_NAME = "movies"
+INDEX_NAME = "assignment2"
 
 
 def get_es_client() -> Elasticsearch:
@@ -32,7 +32,7 @@ def index_movies(movies_df: pd.DataFrame) -> int:
             "mappings": {
                 "properties": {
                     "movieId": {"type": "integer"},
-                    "title": {"type": "search_as_you_type"},
+                    "title": {"type": "text"},
                     "genres": {"type": "text"},
                 }
             }
@@ -56,17 +56,18 @@ def index_movies(movies_df: pd.DataFrame) -> int:
 
 
 def autocomplete_search(query: str, size: int = 10) -> list[str]:
-    """Return matching movie titles using multi-match bool_prefix."""
+    """Return matching movie titles using match_phrase_prefix (cf. Lab 6)."""
     try:
         client = get_es_client()
         resp = client.search(
             index=INDEX_NAME,
             body={
                 "query": {
-                    "multi_match": {
-                        "query": query,
-                        "type": "bool_prefix",
-                        "fields": ["title", "title._2gram", "title._3gram"],
+                    "match_phrase_prefix": {
+                        "title": {
+                            "query": query,
+                            "max_expansions": 10,
+                        }
                     }
                 },
                 "size": size,
