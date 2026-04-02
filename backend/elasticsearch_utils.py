@@ -10,8 +10,8 @@ import pandas as pd
 from elasticsearch import Elasticsearch
 from elasticsearch.helpers import bulk
 
-ES_URL = os.environ["ES_URL"]
-ES_API_KEY = os.environ["ES_API_KEY"]
+ES_URL = os.environ.get("ES_URL", "")
+ES_API_KEY = os.environ.get("ES_API_KEY", "")
 INDEX_NAME = "assignment2"
 
 
