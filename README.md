@@ -1,23 +1,39 @@
-# CineMatch — Movie Recommendation System
+# Cloud & Advanced Analytics 2025 — Assignment 2
+### CineMatch — Movie Recommendation System
 
-2-tier web app: Flask backend (BigQuery ML + Elasticsearch + TMDB) and Streamlit frontend.
+## 🌐 Live URL
+[**https://cinematch-frontend-97118476415.europe-west6.run.app**](https://cinematch-frontend-97118476415.europe-west6.run.app)
 
-## Live Application
+---
 
-**URL:** https://cinematch-frontend-97118476415.europe-west6.run.app
+## Overview
 
-## Architecture
+A two-tier movie recommendation web application. The Flask backend serves a REST API powered by BigQuery ML (matrix-factorisation collaborative filtering), Elasticsearch (autocomplete search), and the TMDB API (poster and cast enrichment). The Streamlit frontend lets users search, filter, select movies they like, and receive personalised recommendations. Both services are containerised with Docker and deployed on Google Cloud Run.
 
-- **Backend** (`/backend`): Flask REST API on port 8080 — BigQuery ML, Elasticsearch autocomplete, TMDB enrichment
-- **Frontend** (`/frontend`): Streamlit UI on port 8080 (Cloud Run)
-- **Infrastructure**: Google Cloud Run (europe-west6), BigQuery ML, Elastic Cloud, TMDB API
+---
+
+## Features Implemented
+
+| Feature | Implementation |
+|---|---|
+| **Autocomplete search** | Elasticsearch `match_phrase_prefix` query via `/autocomplete` endpoint |
+| **Genre filter** | `WHERE genres LIKE '%genre%'` on movies table |
+| **Language filter** | `WHERE language = ?` on `movies_db` table |
+| **Country filter** | `WHERE country = ?` on `movies_db` table |
+| **Year range filter** | `BETWEEN year_min AND year_max` |
+| **Rating filter** | `JOIN` with ratings + `GROUP BY` + `HAVING AVG(rating_im) >= ?` |
+| **Movie details** | TMDB API — poster, overview, cast (with title-based fallback) |
+| **Recommendation engine** | Overlap-count user similarity → BigQuery ML `ML.RECOMMEND` → genre-boosted weighted scoring |
+| **SQL logging** | All executed SQL printed to terminal via `run_query()` |
+
+---
 
 ## Similarity Computation Method
 
 CineMatch uses an **overlap-count similarity** approach to identify users with similar taste:
 
 1. **Input**: The user selects one or more movies they enjoy in the Streamlit UI.
-2. **High-rating filter**: We query the `ml-small-ratings` table for all users who rated **every** selected movie with `rating_im >= 0.7` (on a 0–1 normalised scale). This threshold corresponds to a "liked" rating.
+2. **High-rating filter**: We query the `ml-small-ratings` table for all users who rated the selected movies with `rating_im >= 0.7` (on a 0–1 normalised scale). This threshold corresponds to a "liked" rating.
 3. **Overlap count**: For each candidate user, we count how many of the selected movies they rated highly. Users who liked **more** of the input movies are considered more similar.
 4. **Ranking**: Candidate users are sorted by `common_count DESC` and the top-K (default 10) are retained.
 
@@ -40,31 +56,33 @@ score(m) = [ Σ_u  r̂(u,m) · w_u ] / [ Σ_u  w_u ]  ×  genre_boost(m)
 
 6. **Genre boost**: Movies whose genres overlap with the input selection receive an additional multiplier of `(1 + 0.5 × |shared genres|)`, promoting genre-relevant results.
 
-## Building Locally with Docker
+---
 
-```bash
-# Backend
-cd backend
-docker build -t cinematch-backend .
-docker run -p 8080:8080 \
-  -e ES_URL="<your-es-url>" \
-  -e ES_API_KEY="<your-es-api-key>" \
-  -e TMDB_API_KEY="<your-tmdb-key>" \
-  cinematch-backend
+## Project Structure
 
-# Frontend (in a second terminal)
-cd frontend
-docker build -t cinematch-frontend .
-docker run -p 8501:8080 \
-  -e BACKEND_URL="http://host.docker.internal:8080" \
-  cinematch-frontend
+```
+cinematch-deploy/
+├── backend/
+│   ├── app.py               # Flask REST API (routes)
+│   ├── bigquery_utils.py    # All BigQuery/SQL functions
+│   ├── recommender.py       # Recommendation pipeline orchestration
+│   ├── elasticsearch_utils.py # Elasticsearch autocomplete + indexing
+│   ├── tmdb_utils.py        # TMDB API calls
+│   ├── requirements.txt     # Python dependencies
+│   └── Dockerfile           # Backend container definition
+├── frontend/
+│   ├── app.py               # Streamlit UI
+│   ├── requirements.txt     # Python dependencies
+│   └── Dockerfile           # Frontend container definition
+└── README.md
 ```
 
-All executed SQL queries and their outputs are printed to the terminal (stdout) by the `run_query()` function in `bigquery_utils.py`.
+**Two-tier architecture:**
+- **Backend (Flask)**: REST API on port 8080 — BigQuery ML, Elasticsearch, TMDB enrichment
+- **Frontend (Streamlit)**: UI on port 8080 (Cloud Run) — communicates with backend via HTTP
+- **Infrastructure**: Google Cloud Run (europe-west6), BigQuery ML (`Assignment_1` dataset), Elastic Cloud, TMDB API
 
-## Deployment
-
-Both services are deployed as Docker containers on Google Cloud Run (europe-west6), built via Cloud Build and stored in Artifact Registry.
+---
 
 ## AI Disclosure
 
@@ -75,6 +93,7 @@ GitHub Copilot (Claude Sonnet) was used as an AI assistant during the developmen
 - Implementing the Streamlit `st.session_state` pattern to fix results disappearing on widget interaction
 - Writing the TMDB API wrapper in `tmdb_utils.py`
 - Implementing the Elasticsearch autocomplete integration
+- Debugging Cloud Run deployment issues (environment variables, memory limits)
 - Drafting this README
 
 All code was reviewed, tested, and verified against the live BigQuery dataset and TMDB API by the author.
